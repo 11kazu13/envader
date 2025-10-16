@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Envader - Mini Game</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            font-family: "Segoe UI", "ヒラギノ角ゴ ProN", sans-serif;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            background: radial-gradient(circle at top, #16213e, #0f172a 60%, #020617);
+            color: #f8fafc;
+        }
+
+        h1 {
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            letter-spacing: 0.1em;
+        }
+
+        #info {
+            max-width: 480px;
+            padding: 0 1rem;
+            text-align: center;
+            line-height: 1.5;
+            font-size: 0.95rem;
+            color: #e2e8f0;
+        }
+
+        canvas {
+            margin: 2rem 0;
+            border: 2px solid rgba(148, 163, 184, 0.6);
+            border-radius: 12px;
+            background: linear-gradient(#0f172a, #020617 60%);
+            box-shadow: 0 20px 40px rgba(2, 6, 23, 0.6);
+        }
+
+        #status {
+            min-height: 1.5rem;
+            font-weight: bold;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+<body>
+    <h1>ENVADER</h1>
+    <p id="info">
+        ← → で移動、スペースでビーム発射。<br>
+        できるだけ早く敵を倒そう！
+    </p>
+    <canvas id="game" width="480" height="640"></canvas>
+    <div id="status"></div>
+
+    <script>
+        const canvas = document.getElementById("game");
+        const ctx = canvas.getContext("2d");
+        const statusEl = document.getElementById("status");
+
+        const state = {
+            playing: true,
+            lastShotTime: 0,
+            score: 0,
+            lives: 3
+        };
+
+        const player = {
+            width: 44,
+            height: 20,
+            x: canvas.width / 2 - 22,
+            y: canvas.height - 60,
+            speed: 6,
+            movingLeft: false,
+            movingRight: false
+        };
+
+        const bullets = [];
+        const enemies = [];
+        const enemyConfig = {
+            rows: 4,
+            cols: 6,
+            width: 40,
+            height: 28,
+            padding: 14,
+            offsetTop: 60,
+            offsetLeft: 30,
+            speedX: 1.6
+        };
+
+        const enemyStepDown = 24;
+        let enemyDirection = 1;
+
+        function setupEnemies() {
+            enemies.length = 0;
+            for (let row = 0; row < enemyConfig.rows; row++) {
+                for (let col = 0; col < enemyConfig.cols; col++) {
+                    enemies.push({
+                        x: enemyConfig.offsetLeft + col * (enemyConfig.width + enemyConfig.padding),
+                        y: enemyConfig.offsetTop + row * (enemyConfig.height + enemyConfig.padding),
+                        width: enemyConfig.width,
+                        height: enemyConfig.height,
+                        alive: true
+                    });
+                }
+            }
+        }
+
+        setupEnemies();
+
+        function drawPlayer() {
+            ctx.fillStyle = "#38bdf8";
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y + player.height);
+            ctx.lineTo(player.x + player.width / 2, player.y);
+            ctx.lineTo(player.x + player.width, player.y + player.height);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawBullets() {
+            ctx.fillStyle = "#facc15";
+            bullets.forEach(bullet => {
+                ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+            });
+        }
+
+        function drawEnemies() {
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                ctx.fillStyle = "#f472b6";
+                ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+                ctx.fillStyle = "#111827";
+                ctx.fillRect(enemy.x + 8, enemy.y + 9, 8, 8);
+                ctx.fillRect(enemy.x + enemy.width - 16, enemy.y + 9, 8, 8);
+            });
+        }
+
+        function drawHud() {
+            ctx.fillStyle = "rgba(15, 23, 42, 0.7)";
+            ctx.fillRect(0, 0, canvas.width, 40);
+            ctx.fillStyle = "#e2e8f0";
+            ctx.font = "16px sans-serif";
+            ctx.fillText(`SCORE: ${state.score}`, 20, 24);
+            ctx.fillText(`LIVES: ${state.lives}`, canvas.width - 100, 24);
+        }
+
+        function updatePlayer() {
+            if (player.movingLeft) {
+                player.x = Math.max(10, player.x - player.speed);
+            }
+            if (player.movingRight) {
+                player.x = Math.min(canvas.width - player.width - 10, player.x + player.speed);
+            }
+        }
+
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].y -= bullets[i].speed;
+                if (bullets[i].y + bullets[i].height < 0) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+
+        function updateEnemies() {
+            let hitEdge = false;
+            let highestY = 0;
+
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                enemy.x += enemyConfig.speedX * enemyDirection;
+                highestY = Math.max(highestY, enemy.y + enemy.height);
+
+                if (enemy.x <= 0 || enemy.x + enemy.width >= canvas.width) {
+                    hitEdge = true;
+                }
+            });
+
+            if (hitEdge) {
+                enemyDirection *= -1;
+                enemies.forEach(enemy => {
+                    enemy.y += enemyStepDown;
+                });
+            }
+
+            if (highestY >= player.y) {
+                endGame(false);
+            }
+        }
+
+        function checkCollisions() {
+            bullets.forEach((bullet, bulletIndex) => {
+                enemies.forEach((enemy) => {
+                    if (!enemy.alive) return;
+                    if (
+                        bullet.x < enemy.x + enemy.width &&
+                        bullet.x + bullet.width > enemy.x &&
+                        bullet.y < enemy.y + enemy.height &&
+                        bullet.y + bullet.height > enemy.y
+                    ) {
+                        enemy.alive = false;
+                        bullets.splice(bulletIndex, 1);
+                        state.score += 100;
+                    }
+                });
+            });
+
+            enemies.forEach(enemy => {
+                if (!enemy.alive) return;
+                const collided =
+                    player.x < enemy.x + enemy.width &&
+                    player.x + player.width > enemy.x &&
+                    player.y < enemy.y + enemy.height &&
+                    player.y + player.height > enemy.y;
+
+                if (collided) {
+                    state.lives -= 1;
+                    enemy.alive = false;
+                    if (state.lives <= 0) {
+                        endGame(false);
+                    }
+                }
+            });
+
+            const aliveEnemies = enemies.filter(enemy => enemy.alive);
+            if (aliveEnemies.length === 0) {
+                endGame(true);
+            }
+        }
+
+        function endGame(win) {
+            state.playing = false;
+            statusEl.textContent = win ? "CLEAR! おめでとう🎉" : "GAME OVER... 😢";
+        }
+
+        function shoot() {
+            const now = performance.now();
+            if (now - state.lastShotTime < 300) return;
+            bullets.push({
+                x: player.x + player.width / 2 - 2,
+                y: player.y - 10,
+                width: 4,
+                height: 12,
+                speed: 10
+            });
+            state.lastShotTime = now;
+        }
+
+        function resetGame() {
+            state.playing = true;
+            state.score = 0;
+            state.lives = 3;
+            statusEl.textContent = "";
+            bullets.length = 0;
+            setupEnemies();
+            player.x = canvas.width / 2 - player.width / 2;
+        }
+
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawHud();
+            drawPlayer();
+            drawBullets();
+            drawEnemies();
+
+            if (state.playing) {
+                updatePlayer();
+                updateBullets();
+                updateEnemies();
+                checkCollisions();
+            } else {
+                ctx.fillStyle = "rgba(15, 23, 42, 0.75)";
+                ctx.fillRect(60, canvas.height / 2 - 40, canvas.width - 120, 80);
+                ctx.fillStyle = "#e2e8f0";
+                ctx.font = "18px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText("Enter キーでリスタート", canvas.width / 2, canvas.height / 2 + 6);
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.addEventListener("keydown", (event) => {
+            if (event.code === "ArrowLeft") {
+                player.movingLeft = true;
+            } else if (event.code === "ArrowRight") {
+                player.movingRight = true;
+            } else if (event.code === "Space") {
+                event.preventDefault();
+                if (state.playing) {
+                    shoot();
+                }
+            } else if (event.code === "Enter" && !state.playing) {
+                resetGame();
+            }
+        });
+
+        document.addEventListener("keyup", (event) => {
+            if (event.code === "ArrowLeft") {
+                player.movingLeft = false;
+            } else if (event.code === "ArrowRight") {
+                player.movingRight = false;
+            }
+        });
+
+        statusEl.textContent = "";
+        gameLoop();
+    </script>
+</body>
+</html>
